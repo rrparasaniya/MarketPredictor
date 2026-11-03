@@ -61,43 +61,31 @@ def log_loss_improvement(y: pd.Series, p_model: pd.Series, p_base: pd.Series) ->
     return float(d.mean()), t
 
 
-def training_frame(fs: FeatureSet, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.Series]:
-    """Rows usable for training: label known, warm-up rows dropped."""
-    warmup = int(cfg["models"]["direction"].get("min_history_sessions", 0))
-    y = fs.targets["y_direction"]
+def training_frame(fs: FeatureSet, cfg: dict[str, Any], y: pd.Series | None = None,
+                   section: str = "direction") -> tuple[pd.DataFrame, pd.Series]:
+    """Rows usable for training a binary model.
+
+    Drops rows with an unknown label, the first ``min_history_sessions`` rows, and rows
+    before ``train_start`` (if set) from ``cfg['models'][section]``.
+
+    Args:
+        fs: Feature set.
+        cfg: Project config.
+        y: Binary label (NaN = unknown). Defaults to ``y_direction``.
+        section: Model config section.
+    """
+    mcfg = cfg["models"][section]
+    y = fs.targets["y_direction"] if y is None else y
     keep = y.notna().to_numpy().copy()
-    keep[:warmup] = False
+    keep[: int(mcfg.get("min_history_sessions", 0))] = False
+    if mcfg.get("train_start"):
+        keep &= np.asarray(fs.features.index >= pd.Timestamp(mcfg["train_start"], tz=fs.features.index.tz))
     return fs.features[keep], y[keep].astype(int)
 
 
-def evaluate_direction(fs: FeatureSet, cfg: dict[str, Any],
-                       candidates: list[str] | None = None) -> DirectionReport:
-    """Walk-forward predictions and metrics for each candidate model and baseline."""
-    X, y = training_frame(fs, cfg)
-    folds = splits_from_config(len(X), cfg)
-    if not folds:
-        raise ValueError(f"not enough rows ({len(X)}) for walk-forward validation")
+def event_groups(test_X: pd.DataFrame, cfg: dict[str, Any]) -> dict[str, pd.Series]:
+    """Boolean masks for VIX regimes and event days (for split metrics)."""
     rep_cfg = cfg["reporting"]
-    thr = float(cfg["models"]["direction"].get("decision_threshold", 0.5))
-    bins = int(rep_cfg.get("calibration_bins", 10))
-    candidates = candidates or list(cfg["models"]["direction"]["candidates"])
-
-    makers: dict[str, Any] = {f"model_{c}": (lambda c=c: direction_model_from_config(cfg, c))
-                              for c in candidates}
-    baselines = all_baselines(float(cfg["prediction"]["direction_threshold"]))
-    makers.update({f"baseline_{n}": f for n, f in baselines.items()})
-
-    preds = None
-    for name, make in makers.items():
-        logger.info("walk-forward: %s over %d folds", name, len(folds))
-        p = walk_forward_predict(X, y, make, folds)
-        if preds is None:
-            preds = pd.DataFrame({"y": y.loc[p.index], "fold": p["fold"]})
-        preds[f"p_{name}"] = p["p"]
-    assert preds is not None
-
-    yt = preds["y"]
-    test_X = X.loc[preds.index]
     groups: dict[str, pd.Series] = {}
     if "indiavix_level" in test_X:
         regime = vix_regime(test_X["indiavix_level"], **rep_cfg["vix_regimes"])
@@ -107,6 +95,57 @@ def evaluate_direction(fs: FeatureSet, cfg: dict[str, Any],
         if col in test_X:
             groups[col] = test_X[col] == 1
             groups[f"not_{col}"] = test_X[col] == 0
+    return groups
+
+
+def evaluate_direction(fs: FeatureSet, cfg: dict[str, Any],
+                       candidates: list[str] | None = None) -> DirectionReport:
+    """Walk-forward evaluation of the direction models vs the direction baselines."""
+    return evaluate_binary(
+        fs, cfg, fs.targets["y_direction"], "direction",
+        all_baselines(float(cfg["prediction"]["direction_threshold"])),
+        sanity_limit=float(cfg["reporting"]["accuracy_sanity_limit"]), candidates=candidates)
+
+
+def evaluate_binary(fs: FeatureSet, cfg: dict[str, Any], label: pd.Series, section: str,
+                    baselines: dict[str, Any], sanity_limit: float | None = None,
+                    candidates: list[str] | None = None) -> DirectionReport:
+    """Walk-forward predictions and metrics for each candidate model and baseline.
+
+    Args:
+        fs: Feature set.
+        cfg: Project config.
+        label: Binary target per session (NaN = unknown).
+        section: Model config section (``direction`` or ``gap``).
+        baselines: Name -> factory for baseline classifiers.
+        sanity_limit: Flag model accuracy above this as a probable leak (None = no check).
+        candidates: Estimators to evaluate (defaults to the section's candidates).
+    """
+    X, y = training_frame(fs, cfg, label, section)
+    folds = splits_from_config(len(X), cfg)
+    if not folds:
+        raise ValueError(f"not enough rows ({len(X)}) for walk-forward validation")
+    rep_cfg = cfg["reporting"]
+    mcfg = cfg["models"][section]
+    thr = float(mcfg.get("decision_threshold", 0.5))
+    bins = int(rep_cfg.get("calibration_bins", 10))
+    candidates = candidates or list(mcfg["candidates"])
+
+    makers: dict[str, Any] = {f"model_{c}": (lambda c=c: direction_model_from_config(cfg, c, section))
+                              for c in candidates}
+    makers.update({f"baseline_{n}": f for n, f in baselines.items()})
+
+    preds = None
+    for name, make in makers.items():
+        logger.info("walk-forward %s: %s over %d folds", section, name, len(folds))
+        p = walk_forward_predict(X, y, make, folds)
+        if preds is None:
+            preds = pd.DataFrame({"y": y.loc[p.index], "fold": p["fold"]})
+        preds[f"p_{name}"] = p["p"]
+    assert preds is not None
+
+    yt = preds["y"]
+    groups = event_groups(X.loc[preds.index], cfg)
 
     metrics, splits, calib = {}, {}, {}
     for name in makers:
@@ -127,10 +166,10 @@ def evaluate_direction(fs: FeatureSet, cfg: dict[str, Any],
             beats[n] = bool(diff > 0 and t >= min_t)
 
     warnings = []
-    limit = float(rep_cfg["accuracy_sanity_limit"])
     for name in makers:
         acc = metrics[name]["accuracy"]
-        if name.startswith("model_") and acc > limit:
+        if sanity_limit is not None and name.startswith("model_") and acc > sanity_limit:
+            limit = sanity_limit
             warnings.append(f"{name}: accuracy {acc:.3f} > {limit:.2f}. Treat as a probable "
                             "leak or bug and investigate before using these results.")
     for name, ok in beats.items():

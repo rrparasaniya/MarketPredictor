@@ -115,9 +115,14 @@ class DirectionModel:
         return (s / total if total > 0 else s).sort_values(ascending=False)
 
 
-def direction_model_from_config(cfg: dict[str, Any], estimator: str | None = None) -> DirectionModel:
-    """Build a :class:`DirectionModel` from ``cfg['models']['direction']``."""
-    d = cfg["models"]["direction"]
+def direction_model_from_config(cfg: dict[str, Any], estimator: str | None = None,
+                                section: str = "direction") -> DirectionModel:
+    """Build a binary :class:`DirectionModel` from ``cfg['models'][section]``.
+
+    Sections without their own ``params`` reuse ``models.direction.params``.
+    """
+    d = cfg["models"][section]
     name = estimator or d["estimator"]
-    return DirectionModel(name, dict(d["params"].get(name, {})), d.get("calibration", "none"),
+    params = (d.get("params") or cfg["models"]["direction"]["params"]).get(name, {})
+    return DirectionModel(name, dict(params), d.get("calibration", "none"),
                           float(d.get("calibration_fraction", 0.2)), int(cfg["models"]["random_seed"]))

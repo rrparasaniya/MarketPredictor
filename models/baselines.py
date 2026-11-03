@@ -75,6 +75,38 @@ class EmaCrossover(_RuleBaseline):
         return (g > 0).astype(object).where(g.notna())
 
 
+class BaseRate(_RuleBaseline):
+    """P(class 1) = the training base rate, for every row."""
+
+    name = "base_rate"
+
+    def signal(self, X: pd.DataFrame) -> pd.Series:
+        return pd.Series(np.nan, index=X.index, dtype=object)
+
+
+class ThresholdRule(_RuleBaseline):
+    """Rule ``column > threshold`` (or ``<`` with ``below=True``), as a probability."""
+
+    def __init__(self, name: str, column: str, threshold: float = 0.0, below: bool = False) -> None:
+        self.name, self.column, self.threshold, self.below = name, column, threshold, below
+
+    def signal(self, X: pd.DataFrame) -> pd.Series:
+        v = X[self.column] if self.column in X else pd.Series(np.nan, index=X.index)
+        fired = v < self.threshold if self.below else v > self.threshold
+        return fired.astype(object).where(v.notna())
+
+
+def gap_baselines(direction: str, gap_threshold: float) -> dict[str, object]:
+    """Baselines for P(gap up) (``direction="up"``) or P(gap down) (``"down"``)."""
+    down = direction == "down"
+    thr = -np.log1p(gap_threshold) if down else np.log1p(gap_threshold)
+    return {
+        "base_rate": BaseRate,
+        "previous_gap": lambda: ThresholdRule("previous_gap", "idx_gap", thr, below=down),
+        "us_overnight": lambda: ThresholdRule("us_overnight", "gspc_ret_1", 0.0, below=down),
+    }
+
+
 def all_baselines(threshold: float = 0.0) -> dict[str, type | object]:
     """Factories for every direction baseline, keyed by name."""
     return {

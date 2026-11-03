@@ -1,4 +1,4 @@
-"""Daily update: fetch data, work out the target session, and predict its direction.
+"""Daily update: fetch data, work out the target session, predict direction, gap and range.
 
 Predictions are appended to ``<processed_dir>/predictions.csv`` with the data cutoff
 and the previous session they were based on.
@@ -15,6 +15,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -84,9 +85,60 @@ def main(argv: list[str] | None = None) -> int:
                         meta[col].isoformat())
         record = predict_direction(cfg, name, run, fs, target)
         if record is not None:
+            record.update(predict_gap(cfg, name, run, fs))
+            record.update(predict_range(cfg, name, run, fs))
             record["data_refresh_ok"] = all(r.ok for r in results)
             append_prediction(cfg, record)
     return 0
+
+
+def predict_gap(cfg: dict, index_name: str, run: str, fs) -> dict:
+    """P(gap up / flat / down) for the live row, or {} if no gap model is trained."""
+    loaded = load_artifact(artifact_path(cfg, "gap", index_name, run))
+    if loaded is None:
+        logger.warning("%s/%s: no trained gap model", index_name, run)
+        return {}
+    models, meta = loaded
+    up = float(models["up"].predict_proba(fs.features)[0, 1])
+    down = float(models["down"].predict_proba(fs.features)[0, 1])
+    total = up + down
+    if total > 1:  # two separate models can overshoot; renormalise
+        up, down = up / total, down / total
+    flat = max(0.0, 1 - up - down)
+    logger.info("%s %s gap (threshold %.2f%%): up %.2f | flat %.2f | down %.2f", index_name, run,
+                meta["gap_threshold"] * 100, up, flat, down)
+    return {"p_gap_up": round(up, 4), "p_gap_flat": round(flat, 4), "p_gap_down": round(down, 4),
+            "gap_model_beats_baseline": bool(meta["beats_baseline_up"] and meta["beats_baseline_down"])}
+
+
+def predict_range(cfg: dict, index_name: str, run: str, fs) -> dict:
+    """Open/high/low bands in index points for the live row, or {} if no range model.
+
+    For each target, uses the ML bands only if they beat the VIX-implied baseline out of
+    sample; otherwise shows the VIX baseline (CLAUDE.md rule 3).
+    """
+    from models.range import VixNormalRange
+
+    loaded = load_artifact(artifact_path(cfg, "range", index_name, run))
+    if loaded is None:
+        logger.warning("%s/%s: no trained range model", index_name, run)
+        return {}
+    model, meta = loaded
+    prev_close = float(fs.meta["prev_close"].iloc[0])
+    ml = model.predict(fs.features)
+    vix = VixNormalRange(model.targets, meta["bands"], meta["scale_column"]).predict(fs.features)
+    out = {}
+    for t in model.targets:
+        source = "model" if meta["use_model"].get(t) else "vix_baseline"
+        bands = (ml if source == "model" else vix)[t].iloc[0]
+        name = t.removeprefix("y_")
+        out[f"{name}_source"] = source
+        for col, v in bands.items():
+            out[f"{name}_{col}"] = round(prev_close * float(np.exp(v)), 2) if pd.notna(v) else None
+        logger.info("%s %s %s (%s): median %s, 68%% [%s, %s], 95%% [%s, %s]", index_name, run, name,
+                    source, out[f"{name}_med"], out[f"{name}_lo68"], out[f"{name}_hi68"],
+                    out[f"{name}_lo95"], out[f"{name}_hi95"])
+    return out
 
 
 def predict_direction(cfg: dict, index_name: str, run: str, fs, target) -> dict | None:
@@ -124,10 +176,16 @@ def predict_direction(cfg: dict, index_name: str, run: str, fs, target) -> dict 
 
 
 def append_prediction(cfg: dict, record: dict) -> Path:
-    """Append one prediction to the predictions log CSV."""
+    """Append one prediction to the predictions log CSV (adding new columns if needed)."""
     path = resolve_path(cfg["data"]["processed_dir"]) / "predictions.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([record]).to_csv(path, mode="a", header=not path.exists(), index=False)
+    new = pd.DataFrame([record])
+    if path.exists():
+        old = pd.read_csv(path)
+        if list(old.columns) != list(new.columns):
+            pd.concat([old, new], ignore_index=True).to_csv(path, index=False)
+            return path
+    new.to_csv(path, mode="a", header=not path.exists(), index=False)
     return path
 
 
