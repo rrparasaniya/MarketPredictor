@@ -1,8 +1,9 @@
 """Look-ahead bias tests. NEVER weaken or skip these.
 
-Stage 1 covers the data layer: availability timestamps and the as-of filter.
-Feature-level leakage tests (shift future data, features must not change) are
-added here with the features stage.
+Data layer: availability timestamps and the as-of filter.
+Feature layer: for each target session, features built from the full history must
+equal features built from only the data available before the cutoff, and must not
+change when future data (including the target session's own bar) is altered.
 """
 
 from datetime import datetime, timedelta
@@ -14,6 +15,7 @@ import pytest
 
 from data.optional_inputs import load_optional_input
 from data.store import MarketDataStore, available_as_of
+from features.builder import build_features
 from tests.conftest import FakeSource, make_bars
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -93,3 +95,64 @@ def test_optional_input_respects_release_time(cfg, tmp_path):
     # The 3 Nov figure isn't out at the 16:15 evening run, only after 20:00.
     assert available_as_of(df, datetime(2026, 11, 3, 16, 15, tzinfo=IST)).index.max().day == 2
     assert available_as_of(df, datetime(2026, 11, 3, 20, 30, tzinfo=IST)).index.max().day == 3
+
+
+# ---------------------------------------------------------------- feature level
+
+CASES = [(i, r) for i in ("nifty", "sensex") for r in ("morning", "evening")]
+# Ordinary days, a Monday, the session after the Diwali 2025 holidays, an expiry day,
+# and the last session in the data.
+SAMPLE_DATES = ["2025-03-12", "2025-06-30", "2025-10-23", "2026-11-03", "2026-11-06"]
+
+
+def _row_equal(a: pd.Series, b: pd.Series) -> None:
+    pd.testing.assert_series_equal(a, b, check_names=False, rtol=1e-12, atol=0)
+
+
+@pytest.fixture(scope="module")
+def full_builds(market_bars, cfg, calendar):
+    return {c: build_features(market_bars, cfg, calendar, *c) for c in CASES}
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_features_equal_when_built_from_only_past_data(case, full_builds, market_bars, cfg, calendar):
+    full = full_builds[case]
+    for d in SAMPLE_DATES:
+        d = pd.Timestamp(d, tz=IST)
+        cutoff = full.meta.loc[d, "cutoff"]
+        past_only = {t: available_as_of(df, cutoff) for t, df in market_bars.items()}
+        target = pd.DatetimeIndex([d])
+        trunc = build_features(past_only, cfg, calendar, *case, target_dates=target,
+                               cutoffs=pd.Series([cutoff], index=target))
+        _row_equal(trunc.features.loc[d], full.features.loc[d])
+        assert trunc.meta.loc[d, "prev_close"] == full.meta.loc[d, "prev_close"]
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_features_unchanged_when_future_data_is_tampered(case, full_builds, market_bars, cfg, calendar):
+    full = full_builds[case]
+    rng = np.random.default_rng(7)
+    for d in SAMPLE_DATES[:-1]:
+        d = pd.Timestamp(d, tz=IST)
+        cutoff = full.meta.loc[d, "cutoff"]
+        tampered = {}
+        for t, df in market_bars.items():
+            df = df.copy()
+            future = (df["available_at"] >= cutoff).to_numpy()
+            noise = rng.uniform(0.7, 1.3, size=(int(future.sum()), 1))
+            df.loc[future, ["open", "high", "low", "close"]] *= noise
+            tampered[t] = df
+        rebuilt = build_features(tampered, cfg, calendar, *case)
+        _row_equal(rebuilt.features.loc[d], full.features.loc[d])
+        # The target itself does depend on the tampered session bar.
+        assert rebuilt.targets.loc[d, "y_close"] != full.targets.loc[d, "y_close"]
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_no_feature_correlates_with_same_day_outcome(case, full_builds):
+    """Canary: synthetic series are independent random walks, so no honest feature can
+    predict the target's close-to-close return. A strong correlation means a leak."""
+    fs = full_builds[case]
+    y = fs.targets["y_close"]
+    corr = fs.features.iloc[60:].corrwith(y.iloc[60:]).abs().dropna()
+    assert (corr < 0.2).all(), corr[corr >= 0.2].to_dict()

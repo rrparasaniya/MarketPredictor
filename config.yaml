@@ -11,14 +11,25 @@ market:
   holidays_file: data/calendars/nse_holidays.csv
 
 indices:
+  # Expiry schedules are dated so historical rows get the rule in force at the time.
+  # SEBI changes these: add a new entry with its start date rather than editing old ones.
+  # If an expiry day is a holiday, expiry moves to the previous trading day.
+  # monthly = last <weekday> of the month; weekly = every <weekday> (last one is the monthly).
   nifty:
     ticker: "^NSEI"
     name: NIFTY 50
-    expiry_weekday: Tuesday      # SEBI changes this; keep it configurable
+    expiry_schedule:
+      - {from: "2008-01-01", frequency: monthly, weekday: Thursday}
+      - {from: "2019-02-11", frequency: weekly,  weekday: Thursday}   # weekly options launched
+      - {from: "2025-09-01", frequency: weekly,  weekday: Tuesday}    # current
   sensex:
     ticker: "^BSESN"
     name: SENSEX
-    expiry_weekday: Thursday
+    expiry_schedule:
+      - {from: "2008-01-01", frequency: monthly, weekday: Thursday}   # thinly traded era
+      - {from: "2023-05-15", frequency: weekly,  weekday: Friday}     # weekly options relaunched
+      - {from: "2025-01-01", frequency: weekly,  weekday: Tuesday}
+      - {from: "2025-09-01", frequency: weekly,  weekday: Thursday}   # current
 
 data:
   source: yfinance
@@ -64,7 +75,46 @@ optional_inputs:
     path: data/inputs/gift_nifty.csv
     date_column: date
     available_time: "08:30"      # morning snapshot, before the 08:45 run
+    relative_to_prev_close: [price]   # feature = log(price / previous index close)
   pcr_oi:
     path: data/inputs/pcr_oi.csv
     date_column: date
     available_time: "18:00"
+
+features:
+  # A cue older than this (cutoff minus bar availability) is treated as missing.
+  max_staleness_days: 6
+  vix_percentile_window: 252
+  # "diff" = change in level instead of log return (for yields).
+  transforms:
+    "^TNX": diff
+  # Add an "hours since this bar became available" feature for these tickers.
+  age_features: ["^GSPC"]
+  # Which instrument groups and optional inputs each scheduled run may use.
+  # Asian cues only in the morning run (CLAUDE.md rule).
+  runs:
+    morning:
+      groups: [index, vix, macro, global, asia]
+      optional_inputs: [fii_dii, gift_nifty, pcr_oi]
+    evening:
+      groups: [index, vix, macro, global]
+      optional_inputs: [fii_dii, pcr_oi]
+
+events:
+  file: data/calendars/events.csv
+  # Event flags are only trusted inside these date ranges; outside them they are
+  # left missing (NaN) rather than wrongly set to 0. Extend as dates are added.
+  coverage:
+    union_budget: ["2008-01-01", "2026-12-31"]
+    election_results: ["2008-01-01", "2026-12-31"]
+    rbi_policy: ["2022-01-01", "2025-12-31"]
+  # Approximate quarterly results seasons, as [MM-DD, MM-DD] windows.
+  results_season:
+    - ["01-10", "02-15"]
+    - ["04-10", "05-20"]
+    - ["07-10", "08-15"]
+    - ["10-10", "11-15"]
+
+prediction:
+  direction_threshold: 0.0       # up if close > previous close * (1 + threshold)
+  gap_threshold: 0.002           # |open / previous close - 1| below this counts as flat

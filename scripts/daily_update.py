@@ -1,6 +1,6 @@
-"""Daily update: fetch the latest market data and work out the prediction target.
+"""Daily update: fetch the latest data, work out the target, build its feature row.
 
-Stage 1 (data) only: the prediction step is added with the models.
+The prediction step is added with the models.
 
 Usage:
     python scripts/daily_update.py [--full] [--now 2026-11-03T08:45+05:30]
@@ -14,12 +14,15 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from data.calendar import TradingCalendar  # noqa: E402
 from data.optional_inputs import load_all_optional_inputs  # noqa: E402
 from data.store import MarketDataStore  # noqa: E402
-from data.timing import resolve_prediction_target  # noqa: E402
+from data.timing import PredictionMode, resolve_prediction_target  # noqa: E402
+from features.builder import build_dataset  # noqa: E402
 from settings import ist, load_config, setup_logging  # noqa: E402
 
 logger = logging.getLogger("daily_update")
@@ -57,6 +60,26 @@ def main(argv: list[str] | None = None) -> int:
     if failed:
         logger.error("no data for required indices: %s", failed)
         return 1
+
+    if not target.generate_new:
+        logger.info("market is open: showing the existing prediction, not building a new one")
+        return 0
+    run = "morning" if target.mode is PredictionMode.PRE_OPEN else "evening"
+    tdates = pd.DatetimeIndex([pd.Timestamp(target.target_date)]).tz_localize(cfg["timezone"])
+    for name in cfg["indices"]:
+        fs = build_dataset(store, cfg, calendar, name, run, target_dates=tdates,
+                           cutoffs=pd.Series([pd.Timestamp(target.as_of)], index=tdates))
+        row, meta = fs.features.iloc[0], fs.meta.iloc[0]
+        missing = sorted(row.index[row.isna()])
+        logger.info("%s %s run: target=%s cutoff=%s prev_session=%s prev_close=%.2f "
+                    "features=%d missing=%d %s", name, run, target.target_date,
+                    meta["cutoff"].isoformat(), meta["prev_session"].date(), meta["prev_close"],
+                    len(row), len(missing), missing[:8])
+        for col in [c for c in meta.index if c.endswith("_available_at") and pd.notna(meta[c])]:
+            logger.info("  data used: %-28s session=%s available_at=%s", col.removesuffix("_available_at"),
+                        meta[col.replace("available_at", "session")].date()
+                        if col != "idx_available_at" else meta["prev_session"].date(),
+                        meta[col].isoformat())
     return 0
 
 

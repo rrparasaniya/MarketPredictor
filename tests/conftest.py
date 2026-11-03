@@ -57,3 +57,32 @@ class FakeSource:
         if end is not None:
             mask &= df.index <= pd.Timestamp(end)
         return df[mask].copy()
+
+
+SYNTH_START, SYNTH_END = "2024-01-01", "2026-11-06"
+
+
+@pytest.fixture(scope="session")
+def market_bars(cfg, calendar, tmp_path_factory) -> dict[str, pd.DataFrame]:
+    """Synthetic bars for every configured instrument, cached through the real store.
+
+    Indian instruments trade on NSE sessions; others on weekdays. "now" is far in the
+    future, so every bar is stored; tests apply their own cutoffs.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from data.store import MarketDataStore
+
+    nse_days = calendar.trading_days(date.fromisoformat(SYNTH_START), date.fromisoformat(SYNTH_END))
+    weekdays = pd.bdate_range(SYNTH_START, SYNTH_END)
+    data = {}
+    for i, (ticker, inst) in enumerate(cfg["instruments"].items()):
+        days = nse_days if inst["timezone"] == "Asia/Kolkata" else weekdays
+        price = 15.0 if inst["group"] == "vix" else 4.0 if ticker == "^TNX" else 1000.0 * (i + 1)
+        data[ticker] = make_bars(days, start_price=price, seed=i)
+    c = dict(cfg, data=dict(cfg["data"], history_start=SYNTH_START))
+    store = MarketDataStore(c, source=FakeSource(data), cache_dir=tmp_path_factory.mktemp("bars"),
+                            now_fn=lambda: datetime(2027, 1, 1, tzinfo=ZoneInfo("Asia/Kolkata")))
+    store.update_all()
+    return store.get_many()
