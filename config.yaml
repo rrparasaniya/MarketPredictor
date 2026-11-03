@@ -1,0 +1,70 @@
+# MarketPredictor configuration. All tunable settings live here.
+# Times are wall-clock times in the stated timezone ("HH:MM").
+
+timezone: Asia/Kolkata
+
+market:
+  open_time: "09:15"
+  close_time: "15:30"
+  morning_run_time: "08:45"
+  evening_run_time: "16:15"
+  holidays_file: data/calendars/nse_holidays.csv
+
+indices:
+  nifty:
+    ticker: "^NSEI"
+    name: NIFTY 50
+    expiry_weekday: Tuesday      # SEBI changes this; keep it configurable
+  sensex:
+    ticker: "^BSESN"
+    name: SENSEX
+    expiry_weekday: Thursday
+
+data:
+  source: yfinance
+  history_start: "2008-03-03"    # India VIX history on Yahoo starts around here
+  cache_dir: data/raw
+  processed_dir: data/processed
+  refetch_overlap_days: 7        # re-download this many days on incremental updates
+  max_retries: 3
+  retry_backoff_seconds: 2.0
+  # Extra delay after an instrument's close before its daily bar counts as final
+  # and usable as a feature (covers closing auctions and feed lag).
+  publish_delay_minutes: 15
+  max_gap_calendar_days: 10      # warn if consecutive bars are further apart than this
+
+# Every downloaded series needs its exchange timezone and the local time its daily
+# bar closes. This is what decides when data becomes available in IST (no look-ahead).
+# For instruments that trade almost 24h, use the end of Yahoo's daily bar.
+instruments:
+  "^NSEI":     {group: index,  timezone: Asia/Kolkata,     close_time: "15:30"}
+  "^BSESN":    {group: index,  timezone: Asia/Kolkata,     close_time: "15:30"}
+  "^NSEBANK":  {group: index,  timezone: Asia/Kolkata,     close_time: "15:30"}
+  "^INDIAVIX": {group: vix,    timezone: Asia/Kolkata,     close_time: "15:30"}
+  "INR=X":     {group: macro,  timezone: Europe/London,    close_time: "23:59"}
+  "BZ=F":      {group: macro,  timezone: America/New_York, close_time: "17:00"}
+  "GC=F":      {group: macro,  timezone: America/New_York, close_time: "17:00"}
+  "^TNX":      {group: macro,  timezone: America/New_York, close_time: "17:00"}
+  "DX-Y.NYB":  {group: macro,  timezone: America/New_York, close_time: "17:00"}
+  "^GSPC":     {group: global, timezone: America/New_York, close_time: "16:00"}
+  "^IXIC":     {group: global, timezone: America/New_York, close_time: "16:00"}
+  "^N225":     {group: asia,   timezone: Asia/Tokyo,       close_time: "15:30"}
+  "^HSI":      {group: asia,   timezone: Asia/Hong_Kong,   close_time: "16:10"}
+
+# Optional CSV inputs: loaded if the file exists, skipped otherwise.
+# Each CSV needs a date column (session date, IST). A row becomes usable at
+# `available_time` IST on that date, unless the CSV has an `available_at` column
+# with explicit timezone-aware timestamps.
+optional_inputs:
+  fii_dii:
+    path: data/inputs/fii_dii.csv
+    date_column: date
+    available_time: "20:00"      # provisional FII/DII figures come out in the evening
+  gift_nifty:
+    path: data/inputs/gift_nifty.csv
+    date_column: date
+    available_time: "08:30"      # morning snapshot, before the 08:45 run
+  pcr_oi:
+    path: data/inputs/pcr_oi.csv
+    date_column: date
+    available_time: "18:00"

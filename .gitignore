@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.env
+
+# downloaded / generated data
+data/raw/
+data/processed/
+models/artifacts/
+logs/
+
+# user-supplied optional inputs (keep the README)
+data/inputs/*.csv
