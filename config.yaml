@@ -11,14 +11,25 @@ market:
   holidays_file: data/calendars/nse_holidays.csv
 
 indices:
+  # Expiry schedules are dated so historical rows get the rule in force at the time.
+  # SEBI changes these: add a new entry with its start date rather than editing old ones.
+  # If an expiry day is a holiday, expiry moves to the previous trading day.
+  # monthly = last <weekday> of the month; weekly = every <weekday> (last one is the monthly).
   nifty:
     ticker: "^NSEI"
     name: NIFTY 50
-    expiry_weekday: Tuesday      # SEBI changes this; keep it configurable
+    expiry_schedule:
+      - {from: "2008-01-01", frequency: monthly, weekday: Thursday}
+      - {from: "2019-02-11", frequency: weekly,  weekday: Thursday}   # weekly options launched
+      - {from: "2025-09-01", frequency: weekly,  weekday: Tuesday}    # current
   sensex:
     ticker: "^BSESN"
     name: SENSEX
-    expiry_weekday: Thursday
+    expiry_schedule:
+      - {from: "2008-01-01", frequency: monthly, weekday: Thursday}   # thinly traded era
+      - {from: "2023-05-15", frequency: weekly,  weekday: Friday}     # weekly options relaunched
+      - {from: "2025-01-01", frequency: weekly,  weekday: Tuesday}
+      - {from: "2025-09-01", frequency: weekly,  weekday: Thursday}   # current
 
 data:
   source: yfinance
@@ -64,7 +75,125 @@ optional_inputs:
     path: data/inputs/gift_nifty.csv
     date_column: date
     available_time: "08:30"      # morning snapshot, before the 08:45 run
+    relative_to_prev_close: [price]   # feature = log(price / previous index close)
   pcr_oi:
     path: data/inputs/pcr_oi.csv
     date_column: date
     available_time: "18:00"
+
+features:
+  # A cue older than this (cutoff minus bar availability) is treated as missing.
+  max_staleness_days: 6
+  vix_percentile_window: 252
+  # "diff" = change in level instead of log return (for yields).
+  transforms:
+    "^TNX": diff
+  # Add an "hours since this bar became available" feature for these tickers.
+  age_features: ["^GSPC"]
+  # Which instrument groups and optional inputs each scheduled run may use.
+  # Asian cues only in the morning run (CLAUDE.md rule).
+  runs:
+    morning:
+      groups: [index, vix, macro, global, asia]
+      optional_inputs: [fii_dii, gift_nifty, pcr_oi]
+    evening:
+      groups: [index, vix, macro, global]
+      optional_inputs: [fii_dii, pcr_oi]
+
+events:
+  file: data/calendars/events.csv
+  # Event flags are only trusted inside these date ranges; outside them they are
+  # left missing (NaN) rather than wrongly set to 0. Extend as dates are added.
+  coverage:
+    union_budget: ["2008-01-01", "2026-12-31"]
+    election_results: ["2008-01-01", "2026-12-31"]
+    rbi_policy: ["2022-01-01", "2025-12-31"]
+  # Approximate quarterly results seasons, as [MM-DD, MM-DD] windows.
+  results_season:
+    - ["01-10", "02-15"]
+    - ["04-10", "05-20"]
+    - ["07-10", "08-15"]
+    - ["10-10", "11-15"]
+
+prediction:
+  direction_threshold: 0.0       # up if close > previous close * (1 + threshold)
+  gap_threshold: 0.002           # |open / previous close - 1| below this counts as flat
+  range_bands: [0.68, 0.95]      # central prediction bands for open / high / low
+
+models:
+  artifacts_dir: models/artifacts
+  random_seed: 42
+  direction:
+    estimator: lightgbm          # deployed model: logistic | lightgbm | xgboost
+    candidates: [logistic, lightgbm, xgboost]   # all evaluated and reported
+    calibration: sigmoid         # none | sigmoid | isotonic
+    calibration_fraction: 0.2    # most recent share of each training window used to calibrate
+    decision_threshold: 0.5      # predict "up" when P(up) >= this
+    min_history_sessions: 60     # drop warm-up rows where rolling features are incomplete
+    params:
+      logistic: {C: 0.05, max_iter: 5000}
+      lightgbm: {n_estimators: 200, learning_rate: 0.02, num_leaves: 7, min_child_samples: 50,
+                 subsample: 0.8, subsample_freq: 1, colsample_bytree: 0.7, reg_lambda: 5.0, verbose: -1}
+      xgboost: {n_estimators: 200, learning_rate: 0.02, max_depth: 3, min_child_weight: 20,
+                subsample: 0.8, colsample_bytree: 0.7, reg_lambda: 5.0}
+
+  gap:
+    # Two binary models: P(gap up) and P(gap down); P(flat) is the remainder.
+    estimator: lightgbm
+    candidates: [logistic, lightgbm]
+    calibration: sigmoid
+    calibration_fraction: 0.2
+    decision_threshold: 0.5
+    min_history_sessions: 60
+    train_start: "2011-01-01"    # Yahoo index opens before 2011 look unreliable (data audit)
+    # params: omitted = reuse models.direction.params
+  range:
+    # LightGBM quantile models on VIX-scaled moves, with split-conformal band correction.
+    min_history_sessions: 60
+    train_start: "2011-01-01"
+    targets: [y_open, y_high, y_low]
+    scale_column: indiavix_implied_move      # VIX/100/sqrt(252)
+    fallback_scale_column: idx_vol_20         # used when VIX is missing
+    calibration_fraction: 0.2                 # newest share of each training window for conformal correction
+    test_sessions: 126                        # retrain every ~6 months in walk-forward (15 models per fit)
+    # The ML range is only used if, for every band, its coverage error is within this of the
+    # VIX baseline's and its average band is narrower. Otherwise the VIX baseline is shown.
+    coverage_tolerance: 0.01
+    params: {n_estimators: 200, learning_rate: 0.03, num_leaves: 7, min_child_samples: 50,
+             subsample: 0.8, subsample_freq: 1, colsample_bytree: 0.7, reg_lambda: 5.0, verbose: -1}
+
+validation:
+  # Expanding-window walk-forward: train on everything before each test block.
+  min_train_sessions: 750        # ~3 years before the first test block
+  test_sessions: 63              # ~1 quarter per test block; retrain before each block
+  embargo_sessions: 1            # sessions dropped between train and test
+  max_train_sessions: null       # set a number for a rolling instead of expanding window
+
+reporting:
+  reports_dir: reports
+  accuracy_sanity_limit: 0.60    # direction accuracy above this is treated as a probable leak
+  min_improvement_t_stat: 2.0    # model must beat the best baseline's log loss by this many std errors
+  calibration_bins: 10
+  vix_regimes: {low: 13.0, high: 20.0}   # India VIX < low = low regime, > high = high regime
+  event_columns: [is_expiry, is_monthly_expiry, is_rbi_policy, is_union_budget, is_election_results]
+
+backtest:
+  # Index prices are used as a stand-in for near-month index futures (basis ignored).
+  # Both runs are only actionable at the target session's open (the evening run happens
+  # after F&O closes at 15:30), so trades enter at the open and exit at the close.
+  model_column: p_model_lightgbm      # OOS probability column from the direction reports
+  long_threshold: 0.55                # go long when P(up) >= this
+  short_threshold: 0.45               # go short when P(up) <= this
+  allow_short: true
+  threshold_grid: [0.50, 0.52, 0.55, 0.60]   # symmetric thresholds for the sensitivity table
+  lots: 1
+  lot_size: {nifty: 75, sensex: 20}   # VERIFY against current exchange lot sizes
+  risk_free_rate: 0.065               # annual, for Sharpe
+  costs:                              # all percentages are % of traded value
+    brokerage_per_order: 20.0         # rupees per executed order (flat-fee discount broker)
+    stt_sell_pct: 0.02                # futures STT, sell side. VERIFY: check for later Budget changes
+    exchange_txn_pct: 0.00173         # NSE futures transaction charge, both sides
+    sebi_fee_pct: 0.0001              # Rs 10 per crore, both sides
+    stamp_duty_buy_pct: 0.002         # futures stamp duty, buy side
+    gst_pct: 18.0                     # GST on brokerage + exchange charges + SEBI fee
+    slippage_pct_per_side: 0.01       # price slippage on each fill

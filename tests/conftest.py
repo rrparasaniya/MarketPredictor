@@ -57,3 +57,66 @@ class FakeSource:
         if end is not None:
             mask &= df.index <= pd.Timestamp(end)
         return df[mask].copy()
+
+
+SYNTH_START, SYNTH_END = "2024-01-01", "2026-11-06"
+
+
+@pytest.fixture(scope="session")
+def market_bars(cfg, calendar, tmp_path_factory) -> dict[str, pd.DataFrame]:
+    """Synthetic bars for every configured instrument, cached through the real store.
+
+    Indian instruments trade on NSE sessions; others on weekdays. "now" is far in the
+    future, so every bar is stored; tests apply their own cutoffs.
+    """
+    data = synthetic_raw(cfg, calendar)
+    return store_bars(cfg, data, tmp_path_factory.mktemp("bars"))
+
+
+def synthetic_raw(cfg, calendar) -> dict[str, pd.DataFrame]:
+    """Independent random-walk bars per instrument (NSE sessions for Indian ones)."""
+    nse_days = calendar.trading_days(date.fromisoformat(SYNTH_START), date.fromisoformat(SYNTH_END))
+    weekdays = pd.bdate_range(SYNTH_START, SYNTH_END)
+    data = {}
+    for i, (ticker, inst) in enumerate(cfg["instruments"].items()):
+        days = nse_days if inst["timezone"] == "Asia/Kolkata" else weekdays
+        price = 15.0 if inst["group"] == "vix" else 4.0 if ticker == "^TNX" else 1000.0 * (i + 1)
+        data[ticker] = make_bars(days, start_price=price, seed=i)
+    return data
+
+
+def store_bars(cfg, data, cache_dir) -> dict[str, pd.DataFrame]:
+    """Pass raw bars through the real store so they get availability timestamps."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from data.store import MarketDataStore
+
+    c = dict(cfg, data=dict(cfg["data"], history_start=SYNTH_START))
+    store = MarketDataStore(c, source=FakeSource(data), cache_dir=cache_dir,
+                            now_fn=lambda: datetime(2027, 1, 1, tzinfo=ZoneInfo("Asia/Kolkata")))
+    store.update_all()
+    return store.get_many()
+
+
+@pytest.fixture(scope="session")
+def signal_bars(cfg, calendar, tmp_path_factory) -> dict[str, pd.DataFrame]:
+    """Synthetic world where each Nifty session follows the previous US (S&P 500) session.
+
+    Nifty log return on day D = 0.8 * S&P return of the last US session before D + noise.
+    That US session closes ~02:30 IST on D, so only the morning run can see it.
+    """
+    data = synthetic_raw(cfg, calendar)
+    spx = data["^GSPC"]["close"]
+    us_ret = np.log(spx / spx.shift(1))
+    nifty = data["^NSEI"].copy()
+    rng = np.random.default_rng(123)
+    prev_us = us_ret.reindex(nifty.index - pd.offsets.BDay(1)).to_numpy()
+    r = 0.8 * np.nan_to_num(prev_us) + rng.normal(0, 0.005, len(nifty))
+    close = 20000 * np.exp(np.cumsum(r))
+    open_ = np.r_[close[0], close[:-1]] * np.exp(0.8 * np.nan_to_num(prev_us) * 0.5)
+    nifty["close"], nifty["open"] = close, open_
+    nifty["high"] = np.maximum(open_, close) * 1.003
+    nifty["low"] = np.minimum(open_, close) * 0.997
+    data["^NSEI"] = nifty
+    return store_bars(cfg, data, tmp_path_factory.mktemp("signal_bars"))

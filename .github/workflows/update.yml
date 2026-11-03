@@ -1,0 +1,90 @@
+# Keeps the `live` branch (what Streamlit Community Cloud deploys) up to date:
+#   weekdays 08:15 IST  -> morning forecast for today
+#   weekdays 16:30 IST  -> evening forecast for the next session
+#   Saturdays 10:00 IST -> retrain all models + backtest
+# `live` = master's code + one commit with generated data, models and predictions.
+# It is rebuilt (force-pushed) each run so the repo doesn't grow with every retrain;
+# the predictions log and data cache carry over from the previous `live`.
+name: Update forecasts
+
+on:
+  schedule:
+    - cron: "45 2 * * 1-5"   # 08:15 IST (GitHub may start scheduled runs a little late)
+    - cron: "0 11 * * 1-5"   # 16:30 IST
+    - cron: "30 4 * * 6"     # Saturday 10:00 IST
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "What to run"
+        type: choice
+        options: [daily, retrain]
+        default: daily
+
+permissions:
+  contents: write
+
+concurrency:
+  group: live-branch
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Pick task
+        id: task
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "task=${{ inputs.task }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "30 4 * * 6" ]; then
+            echo "task=retrain" >> "$GITHUB_OUTPUT"
+          else
+            echo "task=daily" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore data, models and predictions from the live branch
+        run: |
+          if git fetch origin live; then
+            for p in data/raw data/processed models/artifacts reports; do
+              git checkout origin/live -- "$p" 2>/dev/null || echo "no $p on live yet"
+            done
+          else
+            echo "No live branch yet: starting from scratch (full data download)."
+          fi
+          git reset -q  # keep restored files in the working tree only
+
+      - name: Run tests
+        run: python -m pytest -q tests/
+
+      - name: Daily forecast
+        if: steps.task.outputs.task == 'daily'
+        run: python scripts/daily_update.py
+
+      - name: Retrain and backtest
+        if: steps.task.outputs.task == 'retrain'
+        run: |
+          python scripts/retrain.py --refresh
+          python scripts/backtest.py
+
+      - name: Publish to the live branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git checkout -B live
+          git add -f data/raw data/processed models/artifacts reports/*.json reports/*.md 2>/dev/null || true
+          git commit -q -m "Update data: ${{ steps.task.outputs.task }} $(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M IST')"
+          git push -f origin live

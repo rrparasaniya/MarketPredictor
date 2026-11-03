@@ -6,7 +6,7 @@ Paths and release times are set under `optional_inputs` in `config.yaml`.
 | File | Contents | Default `available_time` (IST) |
 |---|---|---|
 | `fii_dii.csv` | FII/DII net cash flows (₹ crore) | 20:00 on that date |
-| `gift_nifty.csv` | GIFT Nifty morning level | 08:30 on that date |
+| `gift_nifty.csv` | GIFT Nifty morning level in a `price` column (used as a premium vs the previous index close) | 08:30 on that date |
 | `pcr_oi.csv` | Put-call ratio, open interest | 18:00 on that date |
 
 Format: a `date` column (YYYY-MM-DD, IST session date) plus any numeric columns.
