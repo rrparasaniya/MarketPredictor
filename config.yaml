@@ -176,3 +176,24 @@ reporting:
   calibration_bins: 10
   vix_regimes: {low: 13.0, high: 20.0}   # India VIX < low = low regime, > high = high regime
   event_columns: [is_expiry, is_monthly_expiry, is_rbi_policy, is_union_budget, is_election_results]
+
+backtest:
+  # Index prices are used as a stand-in for near-month index futures (basis ignored).
+  # Both runs are only actionable at the target session's open (the evening run happens
+  # after F&O closes at 15:30), so trades enter at the open and exit at the close.
+  model_column: p_model_lightgbm      # OOS probability column from the direction reports
+  long_threshold: 0.55                # go long when P(up) >= this
+  short_threshold: 0.45               # go short when P(up) <= this
+  allow_short: true
+  threshold_grid: [0.50, 0.52, 0.55, 0.60]   # symmetric thresholds for the sensitivity table
+  lots: 1
+  lot_size: {nifty: 75, sensex: 20}   # VERIFY against current exchange lot sizes
+  risk_free_rate: 0.065               # annual, for Sharpe
+  costs:                              # all percentages are % of traded value
+    brokerage_per_order: 20.0         # rupees per executed order (flat-fee discount broker)
+    stt_sell_pct: 0.02                # futures STT, sell side. VERIFY: check for later Budget changes
+    exchange_txn_pct: 0.00173         # NSE futures transaction charge, both sides
+    sebi_fee_pct: 0.0001              # Rs 10 per crore, both sides
+    stamp_duty_buy_pct: 0.002         # futures stamp duty, buy side
+    gst_pct: 18.0                     # GST on brokerage + exchange charges + SEBI fee
+    slippage_pct_per_side: 0.01       # price slippage on each fill
