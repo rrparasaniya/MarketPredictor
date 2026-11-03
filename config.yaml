@@ -118,3 +118,35 @@ events:
 prediction:
   direction_threshold: 0.0       # up if close > previous close * (1 + threshold)
   gap_threshold: 0.002           # |open / previous close - 1| below this counts as flat
+
+models:
+  artifacts_dir: models/artifacts
+  random_seed: 42
+  direction:
+    estimator: lightgbm          # deployed model: logistic | lightgbm | xgboost
+    candidates: [logistic, lightgbm, xgboost]   # all evaluated and reported
+    calibration: sigmoid         # none | sigmoid | isotonic
+    calibration_fraction: 0.2    # most recent share of each training window used to calibrate
+    decision_threshold: 0.5      # predict "up" when P(up) >= this
+    min_history_sessions: 60     # drop warm-up rows where rolling features are incomplete
+    params:
+      logistic: {C: 0.05, max_iter: 5000}
+      lightgbm: {n_estimators: 200, learning_rate: 0.02, num_leaves: 7, min_child_samples: 50,
+                 subsample: 0.8, subsample_freq: 1, colsample_bytree: 0.7, reg_lambda: 5.0, verbose: -1}
+      xgboost: {n_estimators: 200, learning_rate: 0.02, max_depth: 3, min_child_weight: 20,
+                subsample: 0.8, colsample_bytree: 0.7, reg_lambda: 5.0}
+
+validation:
+  # Expanding-window walk-forward: train on everything before each test block.
+  min_train_sessions: 750        # ~3 years before the first test block
+  test_sessions: 63              # ~1 quarter per test block; retrain before each block
+  embargo_sessions: 1            # sessions dropped between train and test
+  max_train_sessions: null       # set a number for a rolling instead of expanding window
+
+reporting:
+  reports_dir: reports
+  accuracy_sanity_limit: 0.60    # direction accuracy above this is treated as a probable leak
+  min_improvement_t_stat: 2.0    # model must beat the best baseline's log loss by this many std errors
+  calibration_bins: 10
+  vix_regimes: {low: 13.0, high: 20.0}   # India VIX < low = low regime, > high = high regime
+  event_columns: [is_expiry, is_monthly_expiry, is_rbi_policy, is_union_budget, is_election_results]

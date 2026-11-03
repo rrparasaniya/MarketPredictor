@@ -13,3 +13,6 @@ logs/
 
 # user-supplied optional inputs (keep the README)
 data/inputs/*.csv
+
+# evaluation reports
+reports/
