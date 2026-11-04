@@ -25,9 +25,13 @@ generated data, trained models and predictions log. A GitHub Action
 
 | When (IST) | What |
 |---|---|
-| Weekdays 08:15 | Morning forecast for today's session |
-| Weekdays 16:30 | Evening forecast for the next session |
+| Weekdays 07:30, 08:00, 08:30 | Morning forecast for today's session |
+| Weekdays 16:00, 16:30, 17:00 | Evening forecast for the next session |
 | Saturdays 10:00 | Retrain all models and rerun the backtest |
+
+GitHub starts scheduled runs on a best-effort basis, sometimes hours late, so each
+forecast has three slots: the first run to start makes it and later ones refresh it.
+A run that starts after the 09:15 open makes no new forecast.
 
 Streamlit Cloud picks up each push to `live` automatically. Scheduled workflows only run
 from the default branch, so the schedule starts once the workflow file is on `master`.

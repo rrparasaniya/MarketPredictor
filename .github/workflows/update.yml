@@ -1,7 +1,10 @@
 # Keeps the `live` branch (what Streamlit Community Cloud deploys) up to date:
-#   weekdays 08:15 IST  -> morning forecast for today
-#   weekdays 16:30 IST  -> evening forecast for the next session
-#   Saturdays 10:00 IST -> retrain all models + backtest
+#   weekdays 07:30 / 08:00 / 08:30 IST -> morning forecast for today
+#   weekdays 16:00 / 16:30 / 17:00 IST -> evening forecast for the next session
+#   Saturdays 10:00 IST                -> retrain all models + backtest
+# GitHub runs schedules on a best-effort basis and can start them hours late, so each
+# forecast has three slots: whichever starts first makes it, later ones refresh it.
+# After 09:15 IST (market open) a run makes no new forecast (CLAUDE.md timing rule).
 # `live` = master's code + one commit with generated data, models and predictions.
 # It is rebuilt (force-pushed) each run so the repo doesn't grow with every retrain;
 # the predictions log and data cache carry over from the previous `live`.
@@ -9,9 +12,13 @@ name: Update forecasts
 
 on:
   schedule:
-    - cron: "45 2 * * 1-5"   # 08:15 IST (GitHub may start scheduled runs a little late)
+    - cron: "0 2 * * 1-5"    # 07:30 IST
+    - cron: "30 2 * * 1-5"   # 08:00 IST
+    - cron: "0 3 * * 1-5"    # 08:30 IST
+    - cron: "30 10 * * 1-5"  # 16:00 IST
     - cron: "0 11 * * 1-5"   # 16:30 IST
-    - cron: "30 4 * * 6"     # Saturday 10:00 IST
+    - cron: "30 11 * * 1-5"  # 17:00 IST
+    - cron: "30 4 * * 6"     # Saturday 10:00 IST: retrain
   workflow_dispatch:
     inputs:
       task:
@@ -32,12 +39,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: master
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -87,4 +94,10 @@ jobs:
           git checkout -B live
           git add -f data/raw data/processed models/artifacts reports/*.json reports/*.md 2>/dev/null || true
           git commit -q -m "Update data: ${{ steps.task.outputs.task }} $(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M IST')"
+          # GitHub occasionally rejects a push with a transient server error; retry.
+          for delay in 5 15 30 60; do
+            if git push -f origin live; then exit 0; fi
+            echo "push failed; retrying in ${delay}s"
+            sleep "$delay"
+          done
           git push -f origin live

@@ -1,10 +1,15 @@
-pandas>=2.2
-numpy>=1.26
-pyyaml>=6.0
-scikit-learn>=1.4
-xgboost>=2.0
-lightgbm>=4.3
-yfinance>=0.2.50
-shap>=0.45
-streamlit>=1.35
-pytest>=8.0
+# Exact versions that the test suite was run against. Pinned so GitHub Actions and
+# Streamlit Community Cloud rebuilds are reproducible. Upgrade deliberately, then
+# run `pytest tests/` before committing.
+pandas==3.0.5
+numpy==2.5.3
+scipy==1.18.1
+pyyaml==6.0.3
+joblib==1.6.0
+scikit-learn==1.9.1
+xgboost==3.4.1
+lightgbm==4.7.0
+yfinance==1.7.0
+streamlit==1.66.1
+altair==6.3.0
+pytest==9.2.0
