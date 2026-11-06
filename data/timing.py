@@ -74,3 +74,38 @@ def resolve_prediction_target(
     days_ahead = (target - today).days
     label = {0: "today", 1: "tomorrow"}.get(days_ahead, "next session")
     return PredictionTarget(target, mode, label, new, now_ist)
+
+
+def run_for_target(target: PredictionTarget, cfg: dict[str, Any]) -> str:
+    """Which model set ("morning" or "evening") matches the data available at ``target.as_of``.
+
+    The morning models were trained on an 08:45 IST cutoff, when the previous US session
+    and US-hours macro bars (closing up to ~03:45 IST) are known. A pre-open run before
+    ``market.morning_inputs_ready_time`` doesn't have those yet, so it uses the evening
+    models, whose features match that information set. Every other mode is "evening".
+    """
+    ready = parse_time(cfg["market"].get("morning_inputs_ready_time", "04:00"))
+    if target.mode is PredictionMode.PRE_OPEN and target.as_of.time() >= ready:
+        return "morning"
+    return "evening"
+
+
+def expected_prev_session(target_date: date, calendar: TradingCalendar) -> date:
+    """The last regular weekday session before ``target_date``.
+
+    Weekend special sessions (e.g. a Budget Sunday) are skipped because Yahoo often has no
+    bar for them, so the latest bar on hand is the weekday session before.
+    """
+    d = calendar.previous_trading_day(target_date)
+    while d.weekday() >= 5:
+        d = calendar.previous_trading_day(d)
+    return d
+
+
+def inputs_are_current(prev_session: date, target_date: date, calendar: TradingCalendar) -> bool:
+    """Whether the index's latest final bar is the session right before ``target_date``.
+
+    False means a forecast would skip a session, e.g. a run at 15:31 before the day's bar
+    is final (15:45), or a data outage. Such a forecast must not be made.
+    """
+    return prev_session >= expected_prev_session(target_date, calendar)

@@ -8,6 +8,9 @@ market:
   close_time: "15:30"
   morning_run_time: "08:45"
   evening_run_time: "16:15"
+  # A pre-open run before this time lacks the previous US session (closes ~02:30 IST, US
+  # macro bars ~03:45 IST), so it uses the evening models instead of the morning ones.
+  morning_inputs_ready_time: "04:00"
   holidays_file: data/calendars/nse_holidays.csv
 
 indices:

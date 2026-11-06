@@ -23,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from data.calendar import TradingCalendar  # noqa: E402
 from data.optional_inputs import load_all_optional_inputs  # noqa: E402
 from data.store import MarketDataStore  # noqa: E402
-from data.timing import PredictionMode, resolve_prediction_target  # noqa: E402
+from data.timing import (inputs_are_current, resolve_prediction_target,  # noqa: E402
+                         run_for_target)
 from features.builder import build_dataset  # noqa: E402
 from models.artifacts import artifact_path, load_artifact  # noqa: E402
 from settings import ist, load_config, resolve_path, setup_logging  # noqa: E402
@@ -67,7 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     if not target.generate_new:
         logger.info("market is open: showing the existing prediction, not building a new one")
         return 0
-    run = "morning" if target.mode is PredictionMode.PRE_OPEN else "evening"
+    run = run_for_target(target, cfg)
+    logger.info("using the %s models", run)
     tdates = pd.DatetimeIndex([pd.Timestamp(target.target_date)]).tz_localize(cfg["timezone"])
     for name in cfg["indices"]:
         fs = build_dataset(store, cfg, calendar, name, run, target_dates=tdates,
@@ -78,6 +80,11 @@ def main(argv: list[str] | None = None) -> int:
                     "features=%d missing=%d %s", name, run, target.target_date,
                     meta["cutoff"].isoformat(), meta["prev_session"].date(), meta["prev_close"],
                     len(row), len(missing), missing[:8])
+        if not inputs_are_current(meta["prev_session"].date(), target.target_date, calendar):
+            logger.warning("%s: latest final bar is %s, not the session before %s; skipping this "
+                           "forecast (the day's bar may not be final yet, or data is missing)",
+                           name, meta["prev_session"].date(), target.target_date)
+            continue
         for col in [c for c in meta.index if c.endswith("_available_at") and pd.notna(meta[c])]:
             logger.info("  data used: %-28s session=%s available_at=%s", col.removesuffix("_available_at"),
                         meta[col.replace("available_at", "session")].date()
