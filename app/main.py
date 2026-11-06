@@ -18,16 +18,21 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.data_access import (DISCLAIMER, dashboard_state, day_label, fmt_pct,  # noqa: E402
-                             load_predictions, model_quality, range_frame, track_record)
+from app.data_access import (DISCLAIMER, dashboard_state, day_label, load_predictions,  # noqa: E402
+                             model_quality, range_frame, track_record)
+from app.plain import (BEST_GUESS, GLOSSARY, INDEX_ABOUT, PRICE_LABELS, RUN_LABELS,  # noqa: E402
+                       direction_words, friendly_track_record, opening_outcomes, quality_lines,
+                       range_lines, summary_sentences)
 from data.calendar import TradingCalendar  # noqa: E402
 from data.store import MarketDataStore  # noqa: E402
 from settings import ist, load_config  # noqa: E402
 
-# Colors (validated: ordinal blue pair for bands; diverging blue/gray/red for gap).
+# Colors (validated: ordinal blue pair for ranges; diverging blue/gray/red for the opening).
 BAND_95, BAND_68, MEDIAN = "#86b6ef", "#2a78d6", "#ffffff"
-GAP_COLORS = {"Gap up": "#2a78d6", "Flat": "#a3a29b", "Gap down": "#e34948"}
+OPEN_COLORS = {"Opens higher": "#2a78d6", "About the same": "#a3a29b", "Opens lower": "#e34948"}
 REFERENCE = "#8a8985"
+CAVEAT = ("Forecasts can be far off on days with big surprise news, such as elections, wars or sudden "
+          "policy changes.")
 
 st.set_page_config(page_title="MarketPredictor", page_icon="📈", layout="centered")
 
@@ -43,115 +48,107 @@ def _now(cfg) -> datetime:
     return datetime.fromisoformat(override) if override else datetime.now(ist(cfg))
 
 
-def gap_chart(pred: pd.Series) -> alt.Chart:
-    """100% stacked bar: P(gap up / flat / down), with a 2px surface gap between segments."""
-    df = pd.DataFrame({"outcome": list(GAP_COLORS),
-                       "p": [pred["p_gap_up"], pred["p_gap_flat"], pred["p_gap_down"]]})
-    df["order"] = range(len(df))
-    df["label"] = df["outcome"] + " " + (df["p"] * 100).round().astype(int).astype(str) + "%"
-    base = alt.Chart(df).encode(
+def opening_chart(rows: list[tuple[str, float]]) -> alt.Chart:
+    """One bar split into the chances of opening higher / about the same / lower."""
+    df = pd.DataFrame({"outcome": list(OPEN_COLORS), "detail": [r[0] for r in rows],
+                       "p": [r[1] for r in rows], "order": range(3)})
+    return alt.Chart(df).mark_bar(height=28, cornerRadius=4).encode(
         x=alt.X("sum(p):Q", stack="normalize", axis=None),
         order=alt.Order("order:Q"),
-        tooltip=[alt.Tooltip("outcome:N", title="Opening"), alt.Tooltip("p:Q", title="Probability", format=".0%")])
-    bars = base.mark_bar(height=28, cornerRadius=4).encode(
-        color=alt.Color("outcome:N", scale=alt.Scale(domain=list(GAP_COLORS), range=list(GAP_COLORS.values())),
-                        legend=None))
-    return bars.properties(height=36)
+        color=alt.Color("outcome:N", scale=alt.Scale(domain=list(OPEN_COLORS), range=list(OPEN_COLORS.values())),
+                        legend=None),
+        tooltip=[alt.Tooltip("detail:N", title="Outcome"), alt.Tooltip("p:Q", title="Chance", format=".0%")],
+    ).properties(height=36)
 
 
 def range_chart(rf: pd.DataFrame, prev_close: float) -> alt.Chart:
-    """Interval chart: 95% band (light), 68% band (dark), median tick, previous close rule."""
-    order = ["Open", "High", "Low"]
-    y = alt.Y("target:N", sort=order, title=None)
-    tip = [alt.Tooltip("target:N", title="Price"), alt.Tooltip("med:Q", title="Median", format=",.0f"),
-           alt.Tooltip("lo68:Q", title="68% low", format=",.0f"), alt.Tooltip("hi68:Q", title="68% high", format=",.0f"),
-           alt.Tooltip("lo95:Q", title="95% low", format=",.0f"), alt.Tooltip("hi95:Q", title="95% high", format=",.0f")]
-    base = alt.Chart(rf).encode(y=y, tooltip=tip)
-    b95 = base.mark_bar(color=BAND_95, height=14, cornerRadius=4).encode(
+    """Likely range (dark), wider range (light), best guess (white tick), yesterday's close (dashed)."""
+    df = rf.assign(label=rf["key"].map(PRICE_LABELS))
+    order = [PRICE_LABELS[k] for k in ("open", "high", "low")]
+    y = alt.Y("label:N", sort=order, title=None, axis=alt.Axis(labelLimit=200))
+    tip = [alt.Tooltip("label:N", title="Price"), alt.Tooltip("med:Q", title=BEST_GUESS, format=",.0f"),
+           alt.Tooltip("lo68:Q", title="Likely: from", format=",.0f"), alt.Tooltip("hi68:Q", title="Likely: to", format=",.0f"),
+           alt.Tooltip("lo95:Q", title="Wider: from", format=",.0f"), alt.Tooltip("hi95:Q", title="Wider: to", format=",.0f")]
+    base = alt.Chart(df).encode(y=y, tooltip=tip)
+    wide = base.mark_bar(color=BAND_95, height=14, cornerRadius=4).encode(
         x=alt.X("lo95:Q", title="Index level", scale=alt.Scale(zero=False), axis=alt.Axis(format=",.0f", grid=False)),
         x2="hi95:Q")
-    b68 = base.mark_bar(color=BAND_68, height=14, cornerRadius=4).encode(x="lo68:Q", x2="hi68:Q")
-    med = base.mark_tick(color=MEDIAN, thickness=2, size=14).encode(x="med:Q")
+    likely = base.mark_bar(color=BAND_68, height=14, cornerRadius=4).encode(x="lo68:Q", x2="hi68:Q")
+    best = base.mark_tick(color=MEDIAN, thickness=2, size=14).encode(x="med:Q")
     rule = alt.Chart(pd.DataFrame({"prev_close": [prev_close]})).mark_rule(
         color=REFERENCE, strokeDash=[4, 4], strokeWidth=1.5).encode(
-        x="prev_close:Q", tooltip=[alt.Tooltip("prev_close:Q", title="Previous close", format=",.2f")])
-    return (b95 + b68 + med + rule).properties(height=150)
+        x="prev_close:Q", tooltip=[alt.Tooltip("prev_close:Q", title="Yesterday's close", format=",.0f")])
+    return (wide + likely + best + rule).properties(height=150)
 
 
-def show_index(name: str, label: str, pred: pd.Series, cfg) -> None:
-    """Forecast panel for one index."""
+def show_index(name: str, pred: pd.Series, cfg) -> None:
+    """Forecast panel for one index, in plain language."""
+    flat = float(cfg["prediction"]["gap_threshold"])
     prev_close = float(pred["prev_close"])
-    st.caption(f"Based on the {pd.Timestamp(pred['prev_session']).strftime('%d %b %Y')} close of "
-               f"{prev_close:,.2f} · {pred['run']} run · data cutoff "
-               f"{pd.Timestamp(pred['cutoff']).strftime('%d %b %H:%M IST')}")
+    st.caption(INDEX_ABOUT.get(name, ""))
     if not bool(pred.get("data_refresh_ok", True)):
-        st.warning("Some market data failed to refresh for this run; older cached data was used.", icon="⚠️")
+        st.warning("Some market data couldn't be refreshed for this forecast, so slightly older data was used.",
+                   icon="⚠️")
 
-    st.subheader("Opening gap")
+    if (lines := summary_sentences(pred, flat)):
+        st.info("**In short:** " + " ".join(lines), icon="💡")
+
+    st.subheader("How will the market open?")
     if pd.notna(pred.get("p_gap_up")):
-        thr = float(cfg["prediction"]["gap_threshold"]) * 100
-        st.altair_chart(gap_chart(pred), width="stretch")
-        st.markdown(f"🟦 **Gap up {float(pred['p_gap_up']):.0%}** &nbsp;·&nbsp; "
-                    f"⬜ **Flat {float(pred['p_gap_flat']):.0%}** &nbsp;·&nbsp; "
-                    f"🟥 **Gap down {float(pred['p_gap_down']):.0%}**")
-        st.caption(f"Gap up / down = open more than {thr:.1f}% above / below the previous close.")
+        headline, rows = opening_outcomes(pred, flat)
+        st.markdown(headline)
+        st.altair_chart(opening_chart(rows), width="stretch")
+        st.markdown("  \n".join(f"{icon} {label}: **{p:.0%}**"
+                                 for icon, (label, p) in zip(("🟦", "⬜", "🟥"), rows)))
+        st.caption(f"Compared with yesterday's close of {prev_close:,.0f}.")
     else:
-        st.info("No gap model trained yet.")
+        st.info("No opening forecast available yet.")
 
-    st.subheader("Expected range")
+    st.subheader("How far could it move today?")
     rf = range_frame(pred)
     if rf.empty:
-        st.info("No range model trained yet.")
+        st.info("No price-range forecast available yet.")
     else:
+        rf["key"] = rf["target"].str.lower()
         st.altair_chart(range_chart(rf, prev_close), width="stretch")
-        st.caption("Dark band: 68% range · light band: 95% range · white tick: median · dashed line: previous close.")
-        table = pd.DataFrame({
-            "": rf["target"],
-            "Median": rf["med"].map("{:,.0f}".format),
-            "68% range": rf["lo68"].map("{:,.0f}".format) + " – " + rf["hi68"].map("{:,.0f}".format),
-            "95% range": rf["lo95"].map("{:,.0f}".format) + " – " + rf["hi95"].map("{:,.0f}".format),
-        })
-        st.dataframe(table, width="stretch", hide_index=True)
+        st.caption("Dark blue: likely range (2 out of 3 days) · light blue: wider range (19 out of 20 days) · "
+                   "white line: best guess · dashed line: yesterday's close.")
+        st.markdown("\n".join(f"- {line}" for line in range_lines(rf)))
         if (rf["source"] == "vix_baseline").any():
-            st.caption("Rows marked VIX baseline use the India-VIX-implied range because the ML range "
-                       "did not beat it in testing.")
+            st.caption("\\* For these rows we show a simpler estimate based on India VIX (a measure of how "
+                       "nervous the market is), because it did better in testing.")
 
-    st.subheader("Direction")
+    st.subheader("Will it end the day higher or lower?")
     p_up = float(pred["p_up"])
-    c1, c2 = st.columns(2)
-    c1.metric("Chance of closing above previous close", f"{p_up:.0%}")
-    c2.metric("Call", "Up" if pred["call"] == "up" else "Down")
-    if not bool(pred.get("model_beats_baseline", False)):
-        st.warning("This direction model did not beat simple baselines in testing. Treat this as noise.",
-                   icon="⚠️")
-    st.caption("Direction forecasts come mostly from overnight global cues that the market prices in at "
-               "the open. In backtests they showed no tradable edge after costs.")
+    lean, note = direction_words(p_up, bool(pred.get("model_beats_baseline", False)))
+    st.metric("Chance of closing higher than yesterday", f"{p_up:.0%}")
+    st.markdown(lean)
+    if bool(pred.get("model_beats_baseline", False)):
+        st.caption(note)
+    else:
+        st.warning(note, icon="⚠️")
+
+    st.caption(CAVEAT)
+    with st.expander("Technical details"):
+        st.markdown(
+            f"- Forecast type: {RUN_LABELS.get(pred['run'], pred['run'])}\n"
+            f"- Based on the close of {pd.Timestamp(pred['prev_session']):%d %b %Y}: {prev_close:,.2f}\n"
+            f"- Data used up to: {pd.Timestamp(pred['cutoff']):%d %b %Y, %H:%M IST}\n"
+            f"- Models last trained on data up to: {pred.get('model_trained_through', '—')}")
 
 
 def quality_section(cfg, name: str) -> None:
-    """Out-of-sample track record from the walk-forward reports."""
+    """How the forecasts did in past testing, in everyday terms."""
+    shown = False
     for run in ("morning", "evening"):
         q = model_quality(cfg, name, run)
         if not q:
             continue
-        st.markdown(f"**{run.capitalize()} run**")
-        lines = []
-        if (d := q.get("direction")):
-            lines.append(f"- Direction ({d['period']}, {d['sessions']:,} sessions): accuracy "
-                         f"{fmt_pct(d['accuracy'])} vs {fmt_pct(d['baseline_accuracy'])} for the best simple "
-                         f"rule ({d['best_baseline']}); {'beats' if d['beats_baseline'] else 'does not beat'} it.")
-        if (g := q.get("gap")):
-            lines.append("- Gap: ROC-AUC " + ", ".join(f"{s} {v['roc_auc']:.2f}" for s, v in g.items())
-                         + " (0.5 = coin flip).")
-        if (r := q.get("range")):
-            lines.append("- Range coverage (68% / 95% bands): " + "; ".join(
-                f"{t} {fmt_pct(v['coverage_68'], 0)} / {fmt_pct(v['coverage_95'], 0)}, 68% band "
-                f"{v['width_68_pct']:.2f}% wide vs {v['vix_width_68_pct']:.2f}% for VIX" for t, v in r.items()))
-        if (b := q.get("backtest")):
-            lines.append(f"- Trading the direction call (open → close, after costs): CAGR {fmt_pct(b['cagr'])}, "
-                         f"max drawdown {fmt_pct(b['max_drawdown'])}; buy-and-hold CAGR "
-                         f"{fmt_pct(b['buy_and_hold_cagr'])}.")
-        st.markdown("\n".join(lines))
+        shown = True
+        st.markdown(f"**Forecast {RUN_LABELS[run][0].lower()}{RUN_LABELS[run][1:]}**")
+        st.markdown("\n".join(f"- {line}" for line in quality_lines(q)))
+    if not shown:
+        st.write("No test results available yet.")
 
 
 def main() -> None:
@@ -163,6 +160,7 @@ def main() -> None:
     target = state.target
 
     st.title("MarketPredictor")
+    st.caption("A daily outlook for India's two main stock market indices.")
     st.warning(DISCLAIMER, icon="⚠️")
     st.markdown(f"### Prediction for: {target.target_date.strftime('%a %d %b %Y')}, "
                 f"{day_label(target.target_date, now.date())}")
@@ -177,23 +175,27 @@ def main() -> None:
             if pred is None:
                 old = state.stale[name]
                 if old is None:
-                    st.info("No forecasts yet. Run `python scripts/daily_update.py`.")
+                    st.info("No forecasts yet. They appear after the next scheduled update.")
                     continue
-                st.error(f"No forecast for {target.target_date:%d %b} yet. Showing the last one, for "
-                         f"{old['target_date']:%d %b %Y} ({day_label(old['target_date'], now.date())}).")
+                st.error(f"The forecast for {target.target_date:%d %b} isn't ready yet. Showing the last one, "
+                         f"for {old['target_date']:%d %b %Y} ({day_label(old['target_date'], now.date())}).")
                 pred = old
-            show_index(name, cfg["indices"][name]["name"], pred, cfg)
-            with st.expander("How good are these forecasts?"):
+            show_index(name, pred, cfg)
+            with st.expander("How accurate has this been?"):
                 quality_section(cfg, name)
 
-    with st.expander("Track record: recent forecasts vs what happened"):
+    with st.expander("Recent forecasts vs what actually happened"):
         store = MarketDataStore(cfg)
         bars = {n: store.get(cfg["indices"][n]["ticker"]) for n in cfg["indices"]}
         tr = track_record(preds, bars, cfg)
         if tr.empty:
-            st.write("No completed sessions to compare yet.")
+            st.write("No completed trading days to compare yet.")
         else:
-            st.dataframe(tr.head(30), width="stretch", hide_index=True)
+            names = {n: cfg["indices"][n]["name"] for n in cfg["indices"]}
+            st.dataframe(friendly_track_record(tr.head(30), names), width="stretch", hide_index=True)
+
+    with st.expander("What do these words mean?"):
+        st.markdown("\n".join(f"- **{term}:** {meaning}" for term, meaning in GLOSSARY))
 
     st.divider()
     st.caption(DISCLAIMER)
