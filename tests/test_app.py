@@ -113,7 +113,9 @@ def test_app_renders_required_elements(app_cfg, monkeypatch, now, expect):
     assert expect in text
     assert "Last updated:" in text
     assert DISCLAIMER in [w.value for w in at.warning] and DISCLAIMER in text
-    assert any("did not beat simple baselines" in w.value for w in at.warning)
+    assert any("Low reliability" in w.value for w in at.warning)
+    assert any("In short:" in i.value for i in at.info)
+    assert "How will the market open?" in [h.value for h in at.subheader]
 
 
 def test_app_shows_stale_notice(app_cfg, monkeypatch):
@@ -124,4 +126,4 @@ def test_app_shows_stale_notice(app_cfg, monkeypatch):
     at = AppTest.from_file(str(PROJECT_ROOT / "app" / "main.py"), default_timeout=60)
     at.run()
     assert not at.exception
-    assert any("No forecast for 05 Nov" in e.value for e in at.error)
+    assert any("forecast for 05 Nov isn't ready yet" in e.value for e in at.error)
