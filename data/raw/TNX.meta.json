@@ -1,0 +1,6 @@
+{
+  "ticker": "^TNX",
+  "source": "yfinance",
+  "fetched_at": "2026-11-07T16:44:42.998221+05:30",
+  "rows": 4700
+}
