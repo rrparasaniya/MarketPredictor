@@ -1,0 +1,6 @@
+{
+  "ticker": "^GSPC",
+  "source": "yfinance",
+  "fetched_at": "2026-11-14T17:10:37.304682+05:30",
+  "rows": 4707
+}
