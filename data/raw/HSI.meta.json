@@ -1,0 +1,6 @@
+{
+  "ticker": "^HSI",
+  "source": "yfinance",
+  "fetched_at": "2026-11-21T18:24:32.546930+05:30",
+  "rows": 4610
+}

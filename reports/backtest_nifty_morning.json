@@ -1,0 +1,112 @@
+{
+  "model": {
+    "days": 3776,
+    "total_return": -0.853427838321024,
+    "cagr": -0.1202798528533281,
+    "ann_vol": 0.1122671799351314,
+    "sharpe_idle_cash_0": -1.6640198250393523,
+    "sharpe_idle_cash_rf": -1.0850438497137287,
+    "max_drawdown": -0.8527719787704275,
+    "n_trades": 2722,
+    "exposure": 0.7208686440677966,
+    "long_share": 0.6576047024246877,
+    "hit_rate": 0.4577516531961793,
+    "avg_trade_bps": -6.705689302856966
+  },
+  "model_gross": {
+    "days": 3776,
+    "total_return": -0.3957165200193574,
+    "cagr": -0.03305761172908983,
+    "ann_vol": 0.11219339281702101,
+    "sharpe_idle_cash_0": -0.8228886175960454,
+    "sharpe_idle_cash_rf": -0.24353186255067363,
+    "max_drawdown": -0.49784141458543996,
+    "n_trades": 2722,
+    "exposure": 0.7208686440677966,
+    "long_share": 0.6576047024246877,
+    "hit_rate": 0.49485672299779576,
+    "avg_trade_bps": -1.504064275052565
+  },
+  "baseline_always_up": {
+    "days": 3776,
+    "total_return": 0.0,
+    "cagr": 0.0,
+    "ann_vol": 0.0,
+    "sharpe_idle_cash_0": NaN,
+    "sharpe_idle_cash_rf": NaN,
+    "max_drawdown": 0.0,
+    "n_trades": 0,
+    "exposure": 0.0,
+    "long_share": 0.0,
+    "hit_rate": NaN,
+    "avg_trade_bps": NaN
+  },
+  "baseline_previous_day": {
+    "days": 3776,
+    "total_return": -0.4219592679329983,
+    "cagr": -0.03591849372932665,
+    "ann_vol": 0.04399460195169733,
+    "sharpe_idle_cash_0": -2.2867388081368425,
+    "sharpe_idle_cash_rf": -0.8092848225009466,
+    "max_drawdown": -0.4772514742575499,
+    "n_trades": 696,
+    "exposure": 0.1843220338983051,
+    "long_share": 1.0,
+    "hit_rate": 0.4410919540229885,
+    "avg_trade_bps": -7.6651912215189615
+  },
+  "baseline_ema_20_50": {
+    "days": 3776,
+    "total_return": 0.0,
+    "cagr": 0.0,
+    "ann_vol": 0.0,
+    "sharpe_idle_cash_0": NaN,
+    "sharpe_idle_cash_rf": NaN,
+    "max_drawdown": 0.0,
+    "n_trades": 0,
+    "exposure": 0.0,
+    "long_share": 0.0,
+    "hit_rate": NaN,
+    "avg_trade_bps": NaN
+  },
+  "always_long_intraday": {
+    "days": 3776,
+    "total_return": -0.9867395641118005,
+    "cagr": -0.2506156848194996,
+    "ann_vol": 0.13443971605217742,
+    "sharpe_idle_cash_0": -2.5610095455753945,
+    "sharpe_idle_cash_rf": -2.0775214669872724,
+    "max_drawdown": -0.9883243540394732,
+    "n_trades": 3776,
+    "exposure": 1.0,
+    "long_share": 1.0,
+    "hit_rate": 0.4385593220338983,
+    "avg_trade_bps": -11.083388734685396
+  },
+  "buy_and_hold": {
+    "days": 3776,
+    "total_return": 3.691839330457226,
+    "cagr": 0.10867338014565986,
+    "ann_vol": 0.16341420445199625,
+    "sharpe_idle_cash_0": 0.31579540610964313,
+    "sharpe_idle_cash_rf": 0.713557646044508,
+    "max_drawdown": -0.38439852452742096
+  },
+  "model_prev_close_entry": {
+    "days": 3776,
+    "total_return": 494.55735908683386,
+    "cagr": 0.5130847709071218,
+    "ann_vol": 0.13460756810683314,
+    "sharpe_idle_cash_0": 2.6633240301053522,
+    "sharpe_idle_cash_rf": 3.1462092119282032,
+    "max_drawdown": -0.1816290367947886,
+    "n_trades": 2722,
+    "exposure": 0.7208686440677966,
+    "long_share": 0.6576047024246877,
+    "hit_rate": 0.6109478324761205,
+    "avg_trade_bps": 23.313120068675286
+  },
+  "warnings": [
+    "The model strategy loses money after costs over the test period."
+  ]
+}
