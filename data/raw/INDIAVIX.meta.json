@@ -1,0 +1,6 @@
+{
+  "ticker": "^INDIAVIX",
+  "source": "yfinance",
+  "fetched_at": "2026-11-28T18:55:27.154424+05:30",
+  "rows": 4590
+}
